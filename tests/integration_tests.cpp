@@ -3,6 +3,7 @@
 
 #include <chrono>
 #include <condition_variable>
+#include <cstddef>
 #include <cstdint>
 #include <deque>
 #include <exception>
@@ -157,6 +158,54 @@ Task<void> RunDatabaseTest() {
         "check transaction rollback"
     );
     Check(!rollback_visible, "rolled-back row remained visible");
+
+    // Invalid UTF-8 in a text column (written by another tool, by an older version of an
+    // application, or by hand) is a property of that value, not of the query: it must not fail
+    // rows or columns that are readable, and the raw bytes must stay reachable.
+    Require(
+        co_await database.ExecuteAsync("CREATE TABLE legacy_notes (body TEXT NOT NULL)"),
+        "create legacy notes"
+    );
+    Require(
+        co_await database.ExecuteAsync(
+            "INSERT INTO legacy_notes (body) VALUES (CAST(x'FF41' AS TEXT))"
+        ),
+        "insert legacy note"
+    );
+
+    const auto unread_bad_column = Require(
+        co_await database.QueryAsync<std::int64_t>(
+            "SELECT 1, body FROM legacy_notes",
+            [](const sqlite::RowView& row) { return row.Get<std::int64_t>(0); }
+        ),
+        "query a row whose other column holds invalid text"
+    );
+    Check(
+        unread_bad_column.size() == 1 && unread_bad_column[0] == 1,
+        "a text column the decoder never read failed the whole query"
+    );
+
+    const auto bad_as_string = co_await database.QueryAsync<std::string>(
+        "SELECT body FROM legacy_notes",
+        [](const sqlite::RowView& row) { return row.Get<std::string>(0); }
+    );
+    Check(
+        !bad_as_string && bad_as_string.Error().Code() == sqlite::ErrorCode::Decode,
+        "decoding invalid text did not report ErrorCode::Decode"
+    );
+
+    const auto bad_as_bytes = Require(
+        co_await database.QueryAsync<Bytes>(
+            "SELECT body FROM legacy_notes",
+            [](const sqlite::RowView& row) { return row.Get<Bytes>(0); }
+        ),
+        "read invalid text as bytes"
+    );
+    Check(
+        bad_as_bytes.size() == 1 && bad_as_bytes[0].size() == 2 &&
+            bad_as_bytes[0][0] == std::byte{0xFF} && bad_as_bytes[0][1] == std::byte{0x41},
+        "raw bytes of an invalid text value did not round-trip"
+    );
 
     Require(co_await database.CloseAsync(), "close database");
     auto closed_query = co_await database.Select(users).CountAsync();
