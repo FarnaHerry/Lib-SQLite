@@ -1324,8 +1324,22 @@ struct Database::State final {
           };
         }
         const auto affinity = DeclaredAffinity(actual->type);
-        if (!affinity || *affinity != column.affinity || actual->not_null == column.nullable ||
+        // SQLite does not set the notnull flag for a primary key that is created without an
+        // explicit NOT NULL (`k TEXT PRIMARY KEY`, and also `INTEGER PRIMARY KEY`), while a
+        // declared primary key can never be optional. Treat the primary key as satisfying the
+        // requirement instead of rejecting a schema the database cannot express any other way.
+        const bool database_not_null = actual->not_null || actual->primary_key;
+        if (!affinity || *affinity != column.affinity ||
+            database_not_null != !column.nullable ||
             actual->primary_key != column.primary_key) {
+          if (!actual->not_null && !actual->primary_key && !column.nullable) {
+            return Error{
+                ErrorCode::SchemaMismatch,
+                "Declared column is not nullable but the database column allows NULL: " +
+                    table.name + "." + column.name + " (recreate the column with NOT NULL)",
+                "validate schema",
+            };
+          }
           return Error{
               ErrorCode::SchemaMismatch,
               "Declared column does not match the database: " + table.name + "." + column.name,
