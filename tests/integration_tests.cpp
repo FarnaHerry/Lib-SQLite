@@ -38,6 +38,37 @@ const sqlite::Table<User> users{
 
 const sqlite::Schema schema{1, users};
 
+/// A table created the way other tools and older releases create one: `k TEXT PRIMARY KEY`
+/// without an explicit NOT NULL. SQLite does not set the notnull flag for it, but a declared
+/// primary key can never be optional, so the declaration has to be accepted.
+struct PrimaryKeyProbe {
+  std::string k;
+  std::string v;
+};
+
+const sqlite::Table<PrimaryKeyProbe> primary_key_probe{
+    "primary_key_probe",
+    sqlite::Column<&PrimaryKeyProbe::k>{"k", sqlite::PrimaryKey{}},
+    sqlite::Column<&PrimaryKeyProbe::v>{"v"},
+};
+
+const sqlite::Schema primary_key_schema{1, primary_key_probe};
+
+/// The same shape, except that `plain` is nullable in the database while the declaration says
+/// otherwise: the mismatch has to name the missing NOT NULL.
+struct NullableProbe {
+  std::int64_t id = 0;
+  std::string plain;
+};
+
+const sqlite::Table<NullableProbe> nullable_probe{
+    "nullable_probe",
+    sqlite::Column<&NullableProbe::id>{"id", sqlite::PrimaryKey{}},
+    sqlite::Column<&NullableProbe::plain>{"plain"},
+};
+
+const sqlite::Schema nullable_schema{1, nullable_probe};
+
 struct Harness {
   std::mutex mutex;
   bool finished = false;
@@ -206,6 +237,78 @@ Task<void> RunDatabaseTest() {
             bad_as_bytes[0][0] == std::byte{0xFF} && bad_as_bytes[0][1] == std::byte{0x41},
         "raw bytes of an invalid text value did not round-trip"
     );
+    // A text primary key created without an explicit NOT NULL: SQLite reports notnull = 0 for it
+    // in PRAGMA table_info, and a declared primary key can never be optional, so the declaration
+    // has to be accepted instead of forcing every such table to be rebuilt.
+    const std::string primary_key_path = database_path + ".primary-key";
+    {
+      sqlite::Database raw = Require(
+          co_await sqlite::Database::OpenAsync(File{primary_key_path}),
+          "open primary key probe database"
+      );
+      Require(
+          co_await raw.ExecuteAsync(
+              "CREATE TABLE primary_key_probe (k TEXT PRIMARY KEY, v TEXT NOT NULL)"
+          ),
+          "create primary key probe table"
+      );
+      Require(co_await raw.ExecuteAsync("PRAGMA user_version = 1"), "version primary key probe");
+      Require(co_await raw.CloseAsync(), "close primary key probe database");
+    }
+    {
+      const sqlite::Result<sqlite::Database> declared = co_await sqlite::Database::OpenAsync(
+          File{primary_key_path}, primary_key_schema
+      );
+      Check(
+          declared.has_value(),
+          declared
+              ? std::string{}
+              : "declaring a text primary key without explicit NOT NULL failed: " +
+                    declared.Error().Message()
+      );
+      if (declared) {
+        Require(
+            co_await declared->InsertAsync(primary_key_probe, PrimaryKeyProbe{.k = "a", .v = "b"}),
+            "insert primary key probe row"
+        );
+        const std::optional<PrimaryKeyProbe> found = Require(
+            co_await declared->FindAsync(primary_key_probe, std::string{"a"}),
+            "find primary key probe row"
+        );
+        Check(found && found->v == "b", "primary key probe row did not round-trip");
+        Require(co_await declared->CloseAsync(), "close declared primary key probe database");
+      }
+    }
+
+    // The mirror case: nullable in the database, non-optional in the declaration. The error has to
+    // name the missing NOT NULL instead of reporting a generic column mismatch.
+    const std::string nullable_path = database_path + ".nullable";
+    {
+      sqlite::Database raw = Require(
+          co_await sqlite::Database::OpenAsync(File{nullable_path}),
+          "open nullable probe database"
+      );
+      Require(
+          co_await raw.ExecuteAsync(
+              "CREATE TABLE nullable_probe (id INTEGER PRIMARY KEY, plain TEXT)"
+          ),
+          "create nullable probe table"
+      );
+      Require(co_await raw.ExecuteAsync("PRAGMA user_version = 1"), "version nullable probe");
+      Require(co_await raw.CloseAsync(), "close nullable probe database");
+    }
+    {
+      const sqlite::Result<sqlite::Database> mismatch = co_await sqlite::Database::OpenAsync(
+          File{nullable_path}, nullable_schema
+      );
+      Check(
+          !mismatch && mismatch.Error().Code() == sqlite::ErrorCode::SchemaMismatch &&
+              mismatch.Error().Message().find("NOT NULL") != std::string::npos,
+          mismatch ? std::string{"opening a nullable column as NOT NULL unexpectedly succeeded"}
+                   : "nullable column mismatch did not mention NOT NULL: " +
+                         mismatch.Error().Message()
+      );
+    }
 
     Require(co_await database.CloseAsync(), "close database");
     auto closed_query = co_await database.Select(users).CountAsync();
