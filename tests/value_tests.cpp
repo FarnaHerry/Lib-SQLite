@@ -1,6 +1,7 @@
 #include <huxerui/sqlite.h>
 
 #include <cassert>
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <stdexcept>
@@ -266,6 +267,20 @@ int main() {
   const std::string invalid_utf8{"\xC3\x28", 2};
   auto rejected_text = sqlite::ValueCodec<std::string>::Encode(invalid_utf8);
   assert(!rejected_text && rejected_text.Error().Code() == sqlite::ErrorCode::Decode);
+
+  // Text values read back from the database are validated when they are decoded, not when the row
+  // is materialized: a value nobody decodes must not fail the query, and the raw bytes stay
+  // reachable through ValueCodec<Bytes>.
+  auto decoded_invalid_text = sqlite::ValueCodec<std::string>::Decode(sqlite::Value{invalid_utf8});
+  assert(!decoded_invalid_text && decoded_invalid_text.Error().Code() == sqlite::ErrorCode::Decode);
+
+  auto raw_invalid_text = sqlite::ValueCodec<huxerui::Bytes>::Decode(sqlite::Value{invalid_utf8});
+  assert(raw_invalid_text);
+  assert(raw_invalid_text->size() == 2);
+  assert((*raw_invalid_text)[0] == std::byte{0xC3} && (*raw_invalid_text)[1] == std::byte{0x28});
+
+  auto raw_valid_text = sqlite::ValueCodec<huxerui::Bytes>::Decode(sqlite::Value{std::string{"用户-42"}});
+  assert(raw_valid_text && raw_valid_text->size() == std::string{"用户-42"}.size());
 
   const sqlite::Table<Organization> organizations{
       "organizations",
