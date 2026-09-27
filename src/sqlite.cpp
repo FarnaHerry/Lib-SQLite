@@ -247,9 +247,11 @@ ReadColumn(HuxerSqliteConnection* connection, HuxerSqliteStatement* statement, i
     if (byte_count > 0 && !text) {
       return MakeError(connection, HUXER_SQLITE_NOMEM, "read text column");
     }
-    if (!IsValidUtf8(text, static_cast<std::size_t>(byte_count))) {
-      return Error{ErrorCode::Decode, "SQLite text contains invalid UTF-8", "read text column"};
-    }
+    // Text is materialized as the bytes SQLite stores. Validating UTF-8 here would fail the whole
+    // query for a value the decoder may never read (invalid text is written by other tools, by
+    // older versions of an application, or by hand). Validation belongs to
+    // ValueCodec<std::string>::Decode, which reports it for the value that is actually decoded;
+    // ValueCodec<Bytes>::Decode keeps the raw bytes available for callers that want them.
     if (byte_count == 0) {
       return Value{std::string{}};
     }
@@ -719,6 +721,10 @@ Result<Value> ValueCodec<std::string>::Encode(const std::string& value) {
 
 Result<std::string> ValueCodec<std::string>::Decode(const Value& value) {
   if (const auto* string = std::get_if<std::string>(&value)) {
+    const auto* text = reinterpret_cast<const unsigned char*>(string->data());
+    if (!IsValidUtf8(text, string->size())) {
+      return sqlite::Error{ErrorCode::Decode, "SQLite text contains invalid UTF-8", "decode text"};
+    }
     return *string;
   }
   return sqlite::Error{ErrorCode::Decode, "SQLite value is not UTF-8 text"};
@@ -731,6 +737,16 @@ Result<Value> ValueCodec<Bytes>::Encode(const Bytes& value) {
 Result<Bytes> ValueCodec<Bytes>::Decode(const Value& value) {
   if (const auto* bytes = std::get_if<Bytes>(&value)) {
     return *bytes;
+  }
+  // Text is stored as its raw bytes, so a caller can always ask for those bytes even when the
+  // value is not valid UTF-8 (this is the documented escape hatch for legacy or foreign data).
+  if (const auto* text = std::get_if<std::string>(&value)) {
+    Bytes bytes;
+    bytes.reserve(text->size());
+    for (const char character : *text) {
+      bytes.push_back(std::byte{static_cast<unsigned char>(character)});
+    }
+    return bytes;
   }
   return sqlite::Error{ErrorCode::Decode, "SQLite value is not a byte array"};
 }

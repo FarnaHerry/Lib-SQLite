@@ -400,9 +400,10 @@ template <> struct ValueCodec<Bytes> {
   /// @return The encoded BLOB value.
   [[nodiscard]] static Result<Value> Encode(const Bytes& value);
 
-  /// Decodes a SQLite BLOB.
+  /// Decodes a SQLite BLOB, or the raw bytes of a SQLite text value.
   /// @param value SQLite value to decode.
-  /// @return The decoded bytes, or ErrorCode::Decode on mismatch.
+  /// @return The decoded bytes, or ErrorCode::Decode on mismatch. Text is returned as stored, so
+  ///         this is the way to read a text value that is not valid UTF-8.
   [[nodiscard]] static Result<Bytes> Decode(const Value& value);
 };
 
