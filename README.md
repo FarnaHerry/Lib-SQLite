@@ -1,5 +1,7 @@
 # HuxerUI SQLite
 
+This downstream fork maintains application fixes on `farna/main`: read-only startup queries, per-value invalid UTF-8 decoding and primary-key schema validation. The official baseline is tracked through `upstream/main` from `HuxerUI/Lib-SQLite`. The SQLite engine remains bundled by this library; applications consume its C++ API. Consumers should pin a validated commit.
+
 HuxerUI SQLite is an optional native persistence library for HuxerUI applications. It combines asynchronous SQLite access with plain C++ record mapping, typed queries, explicit transactions, and versioned schema migrations.
 
 The library is separate from the HuxerUI runtime. Applications opt in through the `HuxerUI::SQLite` CMake target and include its public API explicitly:
