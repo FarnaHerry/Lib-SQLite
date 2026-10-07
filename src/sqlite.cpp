@@ -1495,6 +1495,24 @@ struct Database::State final {
   bool discard_connection = false;
 };
 
+Result<void> Database::QueryReadOnlySync(
+    File file, std::string sql,
+    const std::function<Result<void>(const RowView&)>& decoder,
+    std::vector<Value> parameters, std::chrono::milliseconds busy_timeout) {
+  if (busy_timeout < std::chrono::milliseconds::zero() || !decoder) {
+    throw std::invalid_argument("Invalid SQLite blocking read options");
+  }
+  HuxerSqliteConnection* opened = nullptr;
+  const int result = huxer_sqlite_open(file.Path().c_str(), HUXER_SQLITE_OPEN_READ_ONLY, &opened);
+  const auto close = [](HuxerSqliteConnection* value) { if (value) huxer_sqlite_close(value); };
+  std::unique_ptr<HuxerSqliteConnection, decltype(close)> connection(opened, close);
+  if (result != HUXER_SQLITE_OK) return MakeError(opened, result, "open read-only startup query");
+  const int timeout = static_cast<int>(std::min<std::int64_t>(busy_timeout.count(), INT_MAX));
+  const int configured = huxer_sqlite_busy_timeout(opened, timeout);
+  if (configured != HUXER_SQLITE_OK) return MakeError(opened, configured, "configure startup query timeout");
+  return QueryConnection(opened, std::move(sql), std::move(parameters), decoder, {});
+}
+
 Task<Result<Database>> Database::OpenAsync(File file, OpenOptions options) {
   if (options.busy_timeout < std::chrono::milliseconds::zero()) {
     throw std::invalid_argument("HuxerUI SQLite busy timeout must not be negative");

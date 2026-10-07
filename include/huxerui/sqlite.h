@@ -1615,6 +1615,15 @@ public:
   Database& operator=(Database&&) noexcept = default;
   ~Database() = default;
 
+  /// Performs a blocking startup query on a temporary read-only connection.
+  /// Does not create a database, migrate schema, or change journal mode.
+  /// The decoder runs on the calling thread; the connection closes before return.
+  [[nodiscard]] static Result<void> QueryReadOnlySync(
+      File file, std::string sql,
+      const std::function<Result<void>(const RowView&)>& decoder,
+      std::vector<Value> parameters = {},
+      std::chrono::milliseconds busy_timeout = std::chrono::seconds{5});
+
   /// Opens a database without managing its schema.
   /// @param file Database file supplied through HuxerUI File.
   /// @param options Access, journal, timeout, and parent-directory options.

@@ -309,7 +309,6 @@ Task<void> RunDatabaseTest() {
                          mismatch.Error().Message()
       );
     }
-=======
 
     Require(co_await database.CloseAsync(), "close database");
     auto closed_query = co_await database.Select(users).CountAsync();
