@@ -247,9 +247,11 @@ ReadColumn(HuxerSqliteConnection* connection, HuxerSqliteStatement* statement, i
     if (byte_count > 0 && !text) {
       return MakeError(connection, HUXER_SQLITE_NOMEM, "read text column");
     }
-    if (!IsValidUtf8(text, static_cast<std::size_t>(byte_count))) {
-      return Error{ErrorCode::Decode, "SQLite text contains invalid UTF-8", "read text column"};
-    }
+    // Text is materialized as the bytes SQLite stores. Validating UTF-8 here would fail the whole
+    // query for a value the decoder may never read (invalid text is written by other tools, by
+    // older versions of an application, or by hand). Validation belongs to
+    // ValueCodec<std::string>::Decode, which reports it for the value that is actually decoded;
+    // ValueCodec<Bytes>::Decode keeps the raw bytes available for callers that want them.
     if (byte_count == 0) {
       return Value{std::string{}};
     }
@@ -719,6 +721,10 @@ Result<Value> ValueCodec<std::string>::Encode(const std::string& value) {
 
 Result<std::string> ValueCodec<std::string>::Decode(const Value& value) {
   if (const auto* string = std::get_if<std::string>(&value)) {
+    const auto* text = reinterpret_cast<const unsigned char*>(string->data());
+    if (!IsValidUtf8(text, string->size())) {
+      return sqlite::Error{ErrorCode::Decode, "SQLite text contains invalid UTF-8", "decode text"};
+    }
     return *string;
   }
   return sqlite::Error{ErrorCode::Decode, "SQLite value is not UTF-8 text"};
@@ -731,6 +737,16 @@ Result<Value> ValueCodec<Bytes>::Encode(const Bytes& value) {
 Result<Bytes> ValueCodec<Bytes>::Decode(const Value& value) {
   if (const auto* bytes = std::get_if<Bytes>(&value)) {
     return *bytes;
+  }
+  // Text is stored as its raw bytes, so a caller can always ask for those bytes even when the
+  // value is not valid UTF-8 (this is the documented escape hatch for legacy or foreign data).
+  if (const auto* text = std::get_if<std::string>(&value)) {
+    Bytes bytes;
+    bytes.reserve(text->size());
+    for (const char character : *text) {
+      bytes.push_back(std::byte{static_cast<unsigned char>(character)});
+    }
+    return bytes;
   }
   return sqlite::Error{ErrorCode::Decode, "SQLite value is not a byte array"};
 }
@@ -1298,6 +1314,32 @@ struct Database::State final {
             "validate schema",
         };
       }
+      bool has_pk_index = false;
+      {
+        auto index_decoder = [&has_pk_index](const RowView& row) -> Result<void> {
+              auto origin = row.Get<std::string>("origin");
+              if (!origin) {
+                return origin.Error();
+              }
+              if (*origin == "pk") {
+                has_pk_index = true;
+              }
+              return {};
+            };
+        Result<void> index_queried;
+        const std::string index_sql =
+            "PRAGMA index_list(" + detail::QuoteIdentifier(table.name) + ")";
+        if (transaction) {
+          index_queried = detail::TransactionAccess::QueryEach(
+              *transaction, index_sql, std::move(index_decoder)
+          );
+        } else {
+          index_queried = Query(index_sql, {}, std::move(index_decoder), stop_token);
+        }
+        if (!index_queried) {
+          return index_queried.Error();
+        }
+      }
 
       std::size_t actual_primary_keys = 0;
       for (const ActualColumn& actual : actual_columns) {
@@ -1324,8 +1366,31 @@ struct Database::State final {
           };
         }
         const auto affinity = DeclaredAffinity(actual->type);
-        if (!affinity || *affinity != column.affinity || actual->not_null == column.nullable ||
+        // SQLite guarantees a primary key column can never be NULL in exactly two
+        // situations: the notnull flag is set (WITHOUT ROWID tables, STRICT tables,
+        // or an explicit NOT NULL constraint), or the column is an INTEGER PRIMARY
+        // KEY rowid alias. A rowid alias is a single-column PK whose declared type is
+        // exactly "INTEGER" (SQLite normalizes the type name, so PRAGMA reports it
+        // case-sensitively) and which has no pk index in PRAGMA index_list; inserting
+        // NULL into it auto-generates the rowid, so the stored value is never NULL.
+        // Other primary keys without an explicit NOT NULL (TEXT PRIMARY KEY in a
+        // rowid table, composite primary keys, INTEGER PRIMARY KEY DESC) really do
+        // accept NULL and must not satisfy a declared NOT NULL.
+        const bool integer_rowid_alias =
+            actual->primary_key && actual->type == "INTEGER" && !has_pk_index &&
+            actual_primary_keys == 1;
+        const bool database_not_null = actual->not_null || integer_rowid_alias;
+        if (!affinity || *affinity != column.affinity ||
+            database_not_null != !column.nullable ||
             actual->primary_key != column.primary_key) {
+          if (!database_not_null && !column.nullable) {
+            return Error{
+                ErrorCode::SchemaMismatch,
+                "Declared column is not nullable but the database column allows NULL: " +
+                    table.name + "." + column.name + " (recreate the column with NOT NULL)",
+                "validate schema",
+            };
+          }
           return Error{
               ErrorCode::SchemaMismatch,
               "Declared column does not match the database: " + table.name + "." + column.name,
@@ -1464,6 +1529,24 @@ struct Database::State final {
   bool transaction_active = false;
   bool discard_connection = false;
 };
+
+Result<void> Database::QueryReadOnlySync(
+    File file, std::string sql,
+    const std::function<Result<void>(const RowView&)>& decoder,
+    std::vector<Value> parameters, std::chrono::milliseconds busy_timeout) {
+  if (busy_timeout < std::chrono::milliseconds::zero() || !decoder) {
+    throw std::invalid_argument("Invalid SQLite blocking read options");
+  }
+  HuxerSqliteConnection* opened = nullptr;
+  const int result = huxer_sqlite_open(file.Path().c_str(), HUXER_SQLITE_OPEN_READ_ONLY, &opened);
+  const auto close = [](HuxerSqliteConnection* value) { if (value) huxer_sqlite_close(value); };
+  std::unique_ptr<HuxerSqliteConnection, decltype(close)> connection(opened, close);
+  if (result != HUXER_SQLITE_OK) return MakeError(opened, result, "open read-only startup query");
+  const int timeout = static_cast<int>(std::min<std::int64_t>(busy_timeout.count(), INT_MAX));
+  const int configured = huxer_sqlite_busy_timeout(opened, timeout);
+  if (configured != HUXER_SQLITE_OK) return MakeError(opened, configured, "configure startup query timeout");
+  return QueryConnection(opened, std::move(sql), std::move(parameters), decoder, {});
+}
 
 Task<Result<Database>> Database::OpenAsync(File file, OpenOptions options) {
   if (options.busy_timeout < std::chrono::milliseconds::zero()) {
