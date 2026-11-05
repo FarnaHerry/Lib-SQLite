@@ -3,6 +3,7 @@
 
 #include <chrono>
 #include <condition_variable>
+#include <cstddef>
 #include <cstdint>
 #include <deque>
 #include <exception>
@@ -36,6 +37,68 @@ const sqlite::Table<User> users{
 };
 
 const sqlite::Schema schema{1, users};
+
+/// An INTEGER PRIMARY KEY rowid alias: SQLite reports notnull = 0 for it and has
+/// no pk index in PRAGMA index_list, but inserting NULL auto-generates the
+/// rowid, so the stored value is never NULL. The declaration has to be accepted.
+struct IntegerPrimaryKeyProbe {
+  std::int64_t k = 0;
+  std::string v;
+};
+
+const sqlite::Table<IntegerPrimaryKeyProbe> integer_primary_key_probe{
+    "integer_primary_key_probe",
+    sqlite::Column<&IntegerPrimaryKeyProbe::k>{"k", sqlite::PrimaryKey{}},
+    sqlite::Column<&IntegerPrimaryKeyProbe::v>{"v"},
+};
+
+const sqlite::Schema integer_primary_key_schema{1, integer_primary_key_probe};
+
+/// A TEXT PRIMARY KEY in a rowid table without NOT NULL: SQLite really does
+/// accept NULL here (a long-standing quirk), so a declared NOT NULL has to be
+/// rejected with a message naming the missing constraint.
+struct TextPrimaryKeyProbe {
+  std::string k;
+  std::string v;
+};
+
+const sqlite::Table<TextPrimaryKeyProbe> text_primary_key_probe{
+    "text_primary_key_probe",
+    sqlite::Column<&TextPrimaryKeyProbe::k>{"k", sqlite::PrimaryKey{}},
+    sqlite::Column<&TextPrimaryKeyProbe::v>{"v"},
+};
+
+const sqlite::Schema text_primary_key_schema{1, text_primary_key_probe};
+
+/// A TEXT PRIMARY KEY in a WITHOUT ROWID table: SQLite sets notnull = 1, so
+/// the declaration is satisfied.
+struct WithoutRowidProbe {
+  std::string k;
+  std::string v;
+};
+
+const sqlite::Table<WithoutRowidProbe> without_rowid_probe{
+    "without_rowid_probe",
+    sqlite::Column<&WithoutRowidProbe::k>{"k", sqlite::PrimaryKey{}},
+    sqlite::Column<&WithoutRowidProbe::v>{"v"},
+};
+
+const sqlite::Schema without_rowid_schema{1, without_rowid_probe};
+
+/// The same shape, except that `plain` is nullable in the database while the declaration says
+/// otherwise: the mismatch has to name the missing NOT NULL.
+struct NullableProbe {
+  std::int64_t id = 0;
+  std::string plain;
+};
+
+const sqlite::Table<NullableProbe> nullable_probe{
+    "nullable_probe",
+    sqlite::Column<&NullableProbe::id>{"id", sqlite::PrimaryKey{}},
+    sqlite::Column<&NullableProbe::plain>{"plain"},
+};
+
+const sqlite::Schema nullable_schema{1, nullable_probe};
 
 struct Harness {
   std::mutex mutex;
@@ -158,6 +221,204 @@ Task<void> RunDatabaseTest() {
     );
     Check(!rollback_visible, "rolled-back row remained visible");
 
+    // Invalid UTF-8 in a text column (written by another tool, by an older version of an
+    // application, or by hand) is a property of that value, not of the query: it must not fail
+    // rows or columns that are readable, and the raw bytes must stay reachable.
+    Require(
+        co_await database.ExecuteAsync("CREATE TABLE legacy_notes (body TEXT NOT NULL)"),
+        "create legacy notes"
+    );
+    Require(
+        co_await database.ExecuteAsync(
+            "INSERT INTO legacy_notes (body) VALUES (CAST(x'FF41' AS TEXT))"
+        ),
+        "insert legacy note"
+    );
+
+    const auto unread_bad_column = Require(
+        co_await database.QueryAsync<std::int64_t>(
+            "SELECT 1, body FROM legacy_notes",
+            [](const sqlite::RowView& row) { return row.Get<std::int64_t>(0); }
+        ),
+        "query a row whose other column holds invalid text"
+    );
+    Check(
+        unread_bad_column.size() == 1 && unread_bad_column[0] == 1,
+        "a text column the decoder never read failed the whole query"
+    );
+
+    const auto bad_as_string = co_await database.QueryAsync<std::string>(
+        "SELECT body FROM legacy_notes",
+        [](const sqlite::RowView& row) { return row.Get<std::string>(0); }
+    );
+    Check(
+        !bad_as_string && bad_as_string.Error().Code() == sqlite::ErrorCode::Decode,
+        "decoding invalid text did not report ErrorCode::Decode"
+    );
+
+    const auto bad_as_bytes = Require(
+        co_await database.QueryAsync<Bytes>(
+            "SELECT body FROM legacy_notes",
+            [](const sqlite::RowView& row) { return row.Get<Bytes>(0); }
+        ),
+        "read invalid text as bytes"
+    );
+    Check(
+        bad_as_bytes.size() == 1 && bad_as_bytes[0].size() == 2 &&
+            bad_as_bytes[0][0] == std::byte{0xFF} && bad_as_bytes[0][1] == std::byte{0x41},
+        "raw bytes of an invalid text value did not round-trip"
+    );
+    // An INTEGER PRIMARY KEY rowid alias: SQLite reports notnull = 0 and has no pk
+    // index, but NULL inserts auto-generate the rowid. The declaration has to be
+    // accepted instead of forcing every such table to be rebuilt.
+    const std::string integer_key_path = database_path + ".integer-key";
+    {
+      sqlite::Database raw = Require(
+          co_await sqlite::Database::OpenAsync(File{integer_key_path}),
+          "open integer key probe database"
+      );
+      Require(
+          co_await raw.ExecuteAsync(
+              "CREATE TABLE integer_primary_key_probe (k INTEGER PRIMARY KEY, v TEXT NOT NULL)"
+          ),
+          "create integer key probe table"
+      );
+      Require(co_await raw.ExecuteAsync("PRAGMA user_version = 1"), "version integer key probe");
+      Require(co_await raw.CloseAsync(), "close integer key probe database");
+    }
+    {
+      const sqlite::Result<sqlite::Database> declared = co_await sqlite::Database::OpenAsync(
+          File{integer_key_path}, integer_primary_key_schema
+      );
+      Check(
+          static_cast<bool>(declared),
+          declared
+              ? std::string{}
+              : "declaring an INTEGER primary key rowid alias failed: " +
+                    declared.Error().Message()
+      );
+      if (declared) {
+        Require(
+            co_await declared->InsertAsync(
+                integer_primary_key_probe, IntegerPrimaryKeyProbe{.k = 1, .v = "b"}
+            ),
+            "insert integer key probe row"
+        );
+        const std::optional<IntegerPrimaryKeyProbe> found = Require(
+            co_await declared->FindAsync(integer_primary_key_probe, std::int64_t{1}),
+            "find integer key probe row"
+        );
+        Check(found && found->v == "b", "integer key probe row did not round-trip");
+        Require(co_await declared->CloseAsync(), "close declared integer key probe database");
+      }
+    }
+
+    // A TEXT PRIMARY KEY in a rowid table without NOT NULL: SQLite really does
+    // accept NULL here, so the declaration has to be rejected with a message
+    // naming the missing constraint.
+    const std::string text_key_path = database_path + ".text-key";
+    {
+      sqlite::Database raw = Require(
+          co_await sqlite::Database::OpenAsync(File{text_key_path}),
+          "open text key probe database"
+      );
+      Require(
+          co_await raw.ExecuteAsync(
+              "CREATE TABLE text_primary_key_probe (k TEXT PRIMARY KEY, v TEXT NOT NULL)"
+          ),
+          "create text key probe table"
+      );
+      Require(co_await raw.ExecuteAsync("PRAGMA user_version = 1"), "version text key probe");
+      Require(co_await raw.CloseAsync(), "close text key probe database");
+    }
+    {
+      const sqlite::Result<sqlite::Database> mismatch = co_await sqlite::Database::OpenAsync(
+          File{text_key_path}, text_primary_key_schema
+      );
+      Check(
+          !mismatch && mismatch.Error().Code() == sqlite::ErrorCode::SchemaMismatch &&
+              mismatch.Error().Message().find("NOT NULL") != std::string::npos,
+          mismatch ? std::string{"opening a TEXT primary key without NOT NULL unexpectedly succeeded"}
+                   : "TEXT primary key mismatch did not mention NOT NULL: " +
+                         mismatch.Error().Message()
+      );
+    }
+
+    // A TEXT PRIMARY KEY in a WITHOUT ROWID table: SQLite sets notnull = 1, so
+    // the declaration is satisfied.
+    const std::string without_rowid_path = database_path + ".without-rowid";
+    {
+      sqlite::Database raw = Require(
+          co_await sqlite::Database::OpenAsync(File{without_rowid_path}),
+          "open without rowid probe database"
+      );
+      Require(
+          co_await raw.ExecuteAsync(
+              "CREATE TABLE without_rowid_probe (k TEXT PRIMARY KEY, v TEXT NOT NULL)"
+              " WITHOUT ROWID"
+          ),
+          "create without rowid probe table"
+      );
+      Require(co_await raw.ExecuteAsync("PRAGMA user_version = 1"), "version without rowid probe");
+      Require(co_await raw.CloseAsync(), "close without rowid probe database");
+    }
+    {
+      const sqlite::Result<sqlite::Database> declared = co_await sqlite::Database::OpenAsync(
+          File{without_rowid_path}, without_rowid_schema
+      );
+      Check(
+          static_cast<bool>(declared),
+          declared
+              ? std::string{}
+              : "declaring a WITHOUT ROWID text primary key failed: " +
+                    declared.Error().Message()
+      );
+      if (declared) {
+        Require(
+            co_await declared->InsertAsync(
+                without_rowid_probe, WithoutRowidProbe{.k = "a", .v = "b"}
+            ),
+            "insert without rowid probe row"
+        );
+        const std::optional<WithoutRowidProbe> found = Require(
+            co_await declared->FindAsync(without_rowid_probe, std::string{"a"}),
+            "find without rowid probe row"
+        );
+        Check(found && found->v == "b", "without rowid probe row did not round-trip");
+        Require(co_await declared->CloseAsync(), "close declared without rowid probe database");
+      }
+    }
+
+    // The mirror case: nullable in the database, non-optional in the declaration. The error has to
+    // name the missing NOT NULL instead of reporting a generic column mismatch.
+    const std::string nullable_path = database_path + ".nullable";
+    {
+      sqlite::Database raw = Require(
+          co_await sqlite::Database::OpenAsync(File{nullable_path}),
+          "open nullable probe database"
+      );
+      Require(
+          co_await raw.ExecuteAsync(
+              "CREATE TABLE nullable_probe (id INTEGER PRIMARY KEY, plain TEXT)"
+          ),
+          "create nullable probe table"
+      );
+      Require(co_await raw.ExecuteAsync("PRAGMA user_version = 1"), "version nullable probe");
+      Require(co_await raw.CloseAsync(), "close nullable probe database");
+    }
+    {
+      const sqlite::Result<sqlite::Database> mismatch = co_await sqlite::Database::OpenAsync(
+          File{nullable_path}, nullable_schema
+      );
+      Check(
+          !mismatch && mismatch.Error().Code() == sqlite::ErrorCode::SchemaMismatch &&
+              mismatch.Error().Message().find("NOT NULL") != std::string::npos,
+          mismatch ? std::string{"opening a nullable column as NOT NULL unexpectedly succeeded"}
+                   : "nullable column mismatch did not mention NOT NULL: " +
+                         mismatch.Error().Message()
+      );
+    }
+
     Require(co_await database.CloseAsync(), "close database");
     auto closed_query = co_await database.Select(users).CountAsync();
     Check(
@@ -217,7 +478,7 @@ public:
   }
 
   TextLayoutMetrics MeasureText(
-      std::string_view, const TextStyle&, float, const TextLayoutOptions&
+      const AttributedText&, const TextStyle&, float, const TextLayoutOptions&
   ) override {
     return {};
   }

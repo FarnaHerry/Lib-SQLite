@@ -400,9 +400,10 @@ template <> struct ValueCodec<Bytes> {
   /// @return The encoded BLOB value.
   [[nodiscard]] static Result<Value> Encode(const Bytes& value);
 
-  /// Decodes a SQLite BLOB.
+  /// Decodes a SQLite BLOB, or the raw bytes of a SQLite text value.
   /// @param value SQLite value to decode.
-  /// @return The decoded bytes, or ErrorCode::Decode on mismatch.
+  /// @return The decoded bytes, or ErrorCode::Decode on mismatch. Text is returned as stored, so
+  ///         this is the way to read a text value that is not valid UTF-8.
   [[nodiscard]] static Result<Bytes> Decode(const Value& value);
 };
 
@@ -1613,6 +1614,15 @@ public:
   Database& operator=(const Database&) = default;
   Database& operator=(Database&&) noexcept = default;
   ~Database() = default;
+
+  /// Performs a blocking startup query on a temporary read-only connection.
+  /// Does not create a database, migrate schema, or change journal mode.
+  /// The decoder runs on the calling thread; the connection closes before return.
+  [[nodiscard]] static Result<void> QueryReadOnlySync(
+      File file, std::string sql,
+      const std::function<Result<void>(const RowView&)>& decoder,
+      std::vector<Value> parameters = {},
+      std::chrono::milliseconds busy_timeout = std::chrono::seconds{5});
 
   /// Opens a database without managing its schema.
   /// @param file Database file supplied through HuxerUI File.
