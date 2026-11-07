@@ -30,7 +30,7 @@ namespace huxerui::sqlite {
 /// Identifies the broad category of a database failure.
 ///
 /// Use this portable category for application control flow. When SQLite
-/// supplied a native code, Error::SqlitePrimaryCode() and
+/// supplied a result code, Error::SqlitePrimaryCode() and
 /// Error::SqliteExtendedCode() retain the more specific diagnostic value.
 enum class ErrorCode {
   Unknown,        ///< A failure that does not map to a more specific category.
@@ -1629,7 +1629,7 @@ public:
   /// @param options Access, journal, timeout, and parent-directory options.
   /// @return A task producing an open shared handle or a typed error.
   /// @throws std::invalid_argument If options are internally inconsistent.
-  [[nodiscard]] static Task<Result<Database>> OpenAsync(File file, OpenOptions options = {});
+  static Task<Result<Database>> OpenAsync(File file, OpenOptions options = {});
 
   /// Opens a database and creates, migrates, or validates its declared schema.
   /// @param file Database file supplied through HuxerUI File.
@@ -1638,7 +1638,7 @@ public:
   /// @param options Access, journal, timeout, and parent-directory options.
   /// @return A task producing an open shared handle or a typed error.
   /// @throws std::invalid_argument If options or migration declarations are invalid.
-  [[nodiscard]] static Task<Result<Database>> OpenAsync(
+  static Task<Result<Database>> OpenAsync(
       File file,
       Schema schema,
       Migrations migrations = {},
@@ -1649,18 +1649,18 @@ public:
   ///
   /// Closing through one copy closes every copy. Repeated close calls succeed.
   /// @return A task completing with success or a close error.
-  [[nodiscard]] Task<Result<void>> CloseAsync() const;
+  Task<Result<void>> CloseAsync() const;
 
   /// Executes one raw SQL statement without parameters.
   /// @param sql Exactly one SQL statement.
   /// @return A task producing execution metadata or a typed database error.
-  [[nodiscard]] Task<Result<ExecuteResult>> ExecuteAsync(std::string sql) const;
+  Task<Result<ExecuteResult>> ExecuteAsync(std::string sql) const;
 
   /// Executes one raw SQL statement with pre-encoded parameters.
   /// @param sql Exactly one SQL statement using `?` placeholders.
   /// @param parameters Values bound positionally to the statement.
   /// @return A task producing execution metadata or a typed database error.
-  [[nodiscard]] Task<Result<ExecuteResult>> ExecuteAsync(
+  Task<Result<ExecuteResult>> ExecuteAsync(
       std::string sql,
       std::vector<Value> parameters
   ) const;
@@ -1672,7 +1672,7 @@ public:
   /// @return A task producing execution metadata or an encoding/database error.
   template <detail::EncodableValue... Arguments>
     requires(sizeof...(Arguments) > 0)
-  [[nodiscard]] Task<Result<ExecuteResult>> ExecuteAsync(std::string sql, Arguments&&... arguments) const {
+  Task<Result<ExecuteResult>> ExecuteAsync(std::string sql, Arguments&&... arguments) const {
     return ExecuteEncodedAsync(
         state_, std::move(sql), detail::EncodeValues(std::forward<Arguments>(arguments)...)
     );
@@ -1686,7 +1686,7 @@ public:
   /// @return A task producing decoded rows or the first error.
   template <class T, class Decoder>
     requires detail::RowDecoder<std::remove_cvref_t<Decoder>, T>
-  [[nodiscard]] Task<Result<std::vector<T>>> QueryAsync(std::string sql, Decoder&& decoder) const {
+  Task<Result<std::vector<T>>> QueryAsync(std::string sql, Decoder&& decoder) const {
     return QueryEncodedAsync<T>(
         state_, std::move(sql), std::vector<Value>{}, std::forward<Decoder>(decoder)
     );
@@ -1701,7 +1701,7 @@ public:
   /// @return A task producing decoded rows or the first error.
   template <class T, class Decoder>
     requires detail::RowDecoder<std::remove_cvref_t<Decoder>, T>
-  [[nodiscard]] Task<Result<std::vector<T>>>
+  Task<Result<std::vector<T>>>
   QueryAsync(std::string sql, Decoder&& decoder, std::vector<Value> parameters) const {
     return QueryEncodedAsync<T>(
         state_, std::move(sql), std::move(parameters), std::forward<Decoder>(decoder)
@@ -1718,7 +1718,7 @@ public:
   /// @return A task producing decoded rows or the first error.
   template <class T, class Decoder, detail::EncodableValue... Arguments>
     requires detail::RowDecoder<std::remove_cvref_t<Decoder>, T> && (sizeof...(Arguments) > 0)
-  [[nodiscard]] Task<Result<std::vector<T>>>
+  Task<Result<std::vector<T>>>
   QueryAsync(std::string sql, Decoder&& decoder, Arguments&&... arguments) const {
     return QueryEncodedAsync<T>(
         state_, std::move(sql), detail::EncodeValues(std::forward<Arguments>(arguments)...),
@@ -1733,7 +1733,7 @@ public:
   /// @param conflict_policy SQLite conflict algorithm for this insert.
   /// @return A task producing the affected-row count and optional generated key.
   template <class Record>
-  [[nodiscard]] Task<Result<InsertResult>> InsertAsync(
+  Task<Result<InsertResult>> InsertAsync(
       const Table<Record>& table,
       const Record& record,
       ConflictPolicy conflict_policy = ConflictPolicy::Abort
@@ -1754,7 +1754,7 @@ public:
   /// @param conflict_policy SQLite conflict algorithm applied to every record.
   /// @return A task producing aggregate affected rows and input-aligned keys.
   template <class Record>
-  [[nodiscard]] Task<Result<InsertManyResult>> InsertManyAsync(
+  Task<Result<InsertManyResult>> InsertManyAsync(
       const Table<Record>& table,
       const std::vector<Record>& records,
       ConflictPolicy conflict_policy = ConflictPolicy::Abort
@@ -1772,7 +1772,7 @@ public:
   /// @return A task producing the record, an empty optional, or an error.
   template <class Record, detail::EncodableValue Key>
     requires std::default_initializable<Record>
-  [[nodiscard]] Task<Result<std::optional<Record>>> FindAsync(
+  Task<Result<std::optional<Record>>> FindAsync(
       const Table<Record>& table,
       const Key& key
   ) const {
@@ -1790,7 +1790,7 @@ public:
   /// @param record Record containing its primary key and replacement values.
   /// @return A task producing execution metadata or an encoding/database error.
   template <class Record>
-  [[nodiscard]] Task<Result<ExecuteResult>> UpdateAsync(
+  Task<Result<ExecuteResult>> UpdateAsync(
       const Table<Record>& table,
       const Record& record
   ) const {
@@ -1809,7 +1809,7 @@ public:
   template <class Record, detail::EncodableValue Key, class... Assignments>
     requires(sizeof...(Assignments) > 0) &&
             (std::same_as<std::remove_cvref_t<Assignments>, FieldAssignment<Record>> && ...)
-  [[nodiscard]] Task<Result<ExecuteResult>> UpdateFieldsAsync(
+  Task<Result<ExecuteResult>> UpdateFieldsAsync(
       const Table<Record>& table,
       const Key& key,
       Assignments&&... assignments
@@ -1827,7 +1827,7 @@ public:
   template <class Record, class... Assignments>
     requires(sizeof...(Assignments) > 0) &&
             (std::same_as<std::remove_cvref_t<Assignments>, FieldAssignment<Record>> && ...)
-  [[nodiscard]] Task<Result<ExecuteResult>> UpsertAsync(
+  Task<Result<ExecuteResult>> UpsertAsync(
       const Table<Record>& table,
       const Record& record,
       ConflictTarget<Record> conflict_target,
@@ -1843,7 +1843,7 @@ public:
   /// @return A task producing execution metadata or an encoding/database error.
   /// @throws std::invalid_argument If the conflict target is invalid.
   template <class Record>
-  [[nodiscard]] Task<Result<ExecuteResult>> UpsertAsync(
+  Task<Result<ExecuteResult>> UpsertAsync(
       const Table<Record>& table,
       const Record& record,
       ConflictTarget<Record> conflict_target,
@@ -1857,7 +1857,7 @@ public:
   /// @param key Primary-key value identifying the row.
   /// @return A task producing execution metadata or an encoding/database error.
   template <class Record, detail::EncodableValue Key>
-  [[nodiscard]] Task<Result<ExecuteResult>> DeleteAsync(
+  Task<Result<ExecuteResult>> DeleteAsync(
       const Table<Record>& table,
       const Key& key
   ) const {
@@ -1889,7 +1889,7 @@ public:
   template <class Callback>
     requires std::invocable<std::remove_cvref_t<Callback>&, Transaction&> &&
              detail::ResultType<std::invoke_result_t<std::remove_cvref_t<Callback>&, Transaction&>>
-  [[nodiscard]] auto TransactionAsync(Callback&& callback) const {
+  auto TransactionAsync(Callback&& callback) const {
     using CallbackResult =
         std::remove_cvref_t<std::invoke_result_t<std::remove_cvref_t<Callback>&, Transaction&>>;
     using Value = typename detail::ResultTraits<CallbackResult>::Value;
@@ -1901,46 +1901,46 @@ private:
 
   explicit Database(std::shared_ptr<State> state) : state_(std::move(state)) {}
 
-  [[nodiscard]] static Task<Result<Database>>
+  static Task<Result<Database>>
   OpenEncodedAsync(std::shared_ptr<State> state, File file, OpenOptions options);
-  [[nodiscard]] static Task<Result<Database>> OpenSchemaEncodedAsync(
+  static Task<Result<Database>> OpenSchemaEncodedAsync(
       std::shared_ptr<State> state,
       File file,
       Schema schema,
       Migrations migrations,
       OpenOptions options
   );
-  [[nodiscard]] static Task<Result<ExecuteResult>> ExecuteEncodedAsync(
+  static Task<Result<ExecuteResult>> ExecuteEncodedAsync(
       std::shared_ptr<State> state,
       std::string sql,
       Result<std::vector<Value>> parameters
   );
-  [[nodiscard]] static Task<Result<ExecuteResult>> ExecuteCrudAsync(
+  static Task<Result<ExecuteResult>> ExecuteCrudAsync(
       std::shared_ptr<State> state,
       Result<detail::CrudStatement> statement
   );
-  [[nodiscard]] static Task<Result<InsertResult>> InsertEncodedAsync(
+  static Task<Result<InsertResult>> InsertEncodedAsync(
       std::shared_ptr<State> state,
       Result<detail::CrudStatement> statement
   );
-  [[nodiscard]] static Task<Result<InsertManyResult>> InsertManyEncodedAsync(
+  static Task<Result<InsertManyResult>> InsertManyEncodedAsync(
       std::shared_ptr<State> state,
       Result<std::vector<detail::CrudStatement>> statements
   );
-  [[nodiscard]] static Task<Result<void>> QueryEachAsync(
+  static Task<Result<void>> QueryEachAsync(
       std::shared_ptr<State> state,
       std::string sql,
       Result<std::vector<Value>> parameters,
       std::function<Result<void>(const RowView&)> decoder
   );
-  [[nodiscard]] static Task<Result<void>> RunTransactionAsync(
+  static Task<Result<void>> RunTransactionAsync(
       std::shared_ptr<State> state,
       std::function<Result<void>(Transaction&)> callback
   );
 
   template <class Record>
     requires std::default_initializable<Record>
-  [[nodiscard]] static Task<Result<std::optional<Record>>> FindEncodedAsync(
+  static Task<Result<std::optional<Record>>> FindEncodedAsync(
       std::shared_ptr<State> state,
       detail::TableSchema table,
       Result<detail::CrudStatement> statement
@@ -1971,7 +1971,7 @@ private:
 
   template <class T, class Decoder>
     requires detail::RowDecoder<std::remove_cvref_t<Decoder>, T>
-  [[nodiscard]] static Task<Result<std::vector<T>>> QueryEncodedAsync(
+  static Task<Result<std::vector<T>>> QueryEncodedAsync(
       std::shared_ptr<State> state,
       std::string sql,
       Result<std::vector<Value>> parameters,
@@ -2000,7 +2000,7 @@ private:
   }
 
   template <class T, class Callback>
-  [[nodiscard]] static Task<Result<T>>
+  static Task<Result<T>>
   TransactionEncodedAsync(std::shared_ptr<State> state, Callback callback) {
     auto owned_callback = std::make_shared<Callback>(std::move(callback));
     if constexpr (std::is_void_v<T>) {

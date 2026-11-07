@@ -13,6 +13,14 @@
 
 namespace sqlite = huxerui::sqlite;
 
+namespace {
+
+template <class T> void Discard(T&& value) noexcept {
+  static_cast<void>(value);
+}
+
+} // namespace
+
 enum class Status : std::int32_t {
   Ready = 7,
 };
@@ -302,10 +310,10 @@ int main() {
 
   bool rejected_missing_primary_key = false;
   try {
-    static_cast<void>(sqlite::Table<User>{
+    sqlite::Table<User>{
         "users_without_primary_key",
         sqlite::Column<&User::name>{"name"},
-    });
+    };
   } catch (const std::invalid_argument&) {
     rejected_missing_primary_key = true;
   }
@@ -410,7 +418,7 @@ int main() {
 
   bool rejected_non_unique_conflict_target = false;
   try {
-    static_cast<void>(sqlite::detail::BuildUpsertDoNothingStatement(
+    Discard(sqlite::detail::BuildUpsertDoNothingStatement(
         user_schema, &record,
         sqlite::detail::ConflictTargetAccess::Take(
             sqlite::OnConflict(users.Column<&User::active>())
@@ -423,7 +431,7 @@ int main() {
 
   bool rejected_auto_increment_conflict_target = false;
   try {
-    static_cast<void>(sqlite::detail::BuildUpsertDoNothingStatement(
+    Discard(sqlite::detail::BuildUpsertDoNothingStatement(
         user_schema, &record,
         sqlite::detail::ConflictTargetAccess::Take(
             sqlite::OnConflict(users.Column<&User::id>())
@@ -444,7 +452,7 @@ int main() {
         sqlite::Column<&User::avatar_url>{"avatar_url"},
         sqlite::Column<&User::active>{"active"},
     };
-    static_cast<void>(sqlite::OnConflict(
+    Discard(sqlite::OnConflict(
         users.Column<&User::name>(), archived_users.Column<&User::name>()
     ));
   } catch (const std::invalid_argument&) {
@@ -458,7 +466,7 @@ int main() {
     sqlite::detail::AssignmentAccess::Append(
         assignments, sqlite::Set(users.Column<&User::id>(), std::int64_t{8})
     );
-    static_cast<void>(sqlite::detail::BuildUpdateFieldsStatement(
+    Discard(sqlite::detail::BuildUpdateFieldsStatement(
         user_schema, sqlite::ValueCodec<std::int64_t>::Encode(record.id),
         std::move(assignments)
     ));
@@ -476,7 +484,7 @@ int main() {
     sqlite::detail::AssignmentAccess::Append(
         assignments, sqlite::Set(users.Column<&User::active>(), false)
     );
-    static_cast<void>(sqlite::detail::BuildUpdateFieldsStatement(
+    Discard(sqlite::detail::BuildUpdateFieldsStatement(
         user_schema, sqlite::ValueCodec<std::int64_t>::Encode(record.id),
         std::move(assignments)
     ));
@@ -489,7 +497,6 @@ int main() {
       sqlite::Migration{1, 2, RunMigration},
       sqlite::Migration{2, 3, RunMigration},
   };
-  static_cast<void>(migrations);
 
   bool rejected_invalid_column = false;
   try {
@@ -497,7 +504,6 @@ int main() {
         "users",
         sqlite::Column<&User::id>{"id", sqlite::AutoIncrement{}},
     };
-    static_cast<void>(invalid);
   } catch (const std::invalid_argument&) {
     rejected_invalid_column = true;
   }
@@ -509,7 +515,6 @@ int main() {
         sqlite::Migration{1, 2, RunMigration},
         sqlite::Migration{3, 4, RunMigration},
     };
-    static_cast<void>(invalid);
   } catch (const std::invalid_argument&) {
     rejected_missing_migration = true;
   }

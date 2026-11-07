@@ -1,6 +1,6 @@
 # HuxerUI SQLite
 
-HuxerUI SQLite is an optional native persistence library for HuxerUI applications. It combines asynchronous SQLite access with plain C++ record mapping, typed queries, explicit transactions, and versioned schema migrations.
+HuxerUI SQLite is an optional persistence library for HuxerUI applications. It combines asynchronous SQLite access with plain C++ record mapping, typed queries, explicit transactions, and versioned schema migrations.
 
 The library is separate from the HuxerUI runtime. Applications opt in through the `HuxerUI::SQLite` CMake target and include its public API explicitly:
 
@@ -20,7 +20,7 @@ The library is separate from the HuxerUI runtime. Applications opt in through th
 - Explicit, atomic, adjacent schema migrations
 - Typed result and error values for expected database failures
 - HuxerUI `File`, `Task`, `WorkerSequence`, and lifecycle integration
-- A pinned SQLite amalgamation with consistent native-platform configuration
+- A pinned SQLite amalgamation with consistent configuration across supported platforms
 
 ## Platform support
 
@@ -371,7 +371,7 @@ Invalid table, column, index, query, option, or migration declarations may throw
 
 The library does not define an application backup policy or expose native SQLite handles. In WAL mode, copying only the main database file while the connection is open can produce an incomplete backup because committed data may still be present in the `-wal` file.
 
-Coordinate backups at the application level. Close the shared database before a file-level copy, or use a separately designed SQLite-consistent backup workflow that respects the target platform's sandbox and lifecycle rules. Account for the main database and any journal sidecars when integrating with native backup systems.
+Coordinate backups at the application level. Close the shared database before a file-level copy, or use a separately designed SQLite-consistent backup workflow that respects the target platform's sandbox and lifecycle rules. Account for the main database and any journal sidecars when integrating with system backup services.
 
 HuxerUI SQLite does not provide automatic encryption or SQLCipher integration. Store databases in the platform application-data directory, exclude sensitive files from platform or cloud backups when required, avoid placing secrets in diagnostic messages, and apply the operating system's data-protection facilities appropriate to your threat model.
 

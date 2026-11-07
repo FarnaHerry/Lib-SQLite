@@ -513,7 +513,7 @@ public:
     if (callback) {
       callback();
     } else if (build_frame) {
-      static_cast<void>(runtime.BuildFrame());
+      runtime.BuildFrame();
     }
     return true;
   }
@@ -545,7 +545,7 @@ int main() {
     platform.Start(application);
     UiWindow& runtime = platform;
     runtime.SetWindowMetrics({.viewport = {320.0F, 240.0F}});
-    static_cast<void>(runtime.BuildFrame());
+    runtime.BuildFrame();
 
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{10};
     while (true) {

@@ -376,7 +376,7 @@ public:
 
   /// Executes the selection and decodes every matching row.
   /// @return A task producing rows in the requested order, or an error.
-  [[nodiscard]] Task<Result<std::vector<Record>>> AllAsync() const {
+  Task<Result<std::vector<Record>>> AllAsync() const {
     return QueryRecordsAsync(
         database_, table_, detail::BuildSelectStatement(table_, spec_)
     );
@@ -384,7 +384,7 @@ public:
 
   /// Executes the selection and requires one matching row.
   /// @return A task producing the first row, or ErrorCode::NotFound when empty.
-  [[nodiscard]] Task<Result<Record>> FirstAsync() const {
+  Task<Result<Record>> FirstAsync() const {
     return FirstEncodedAsync(
         database_, table_, detail::BuildSelectStatement(table_, spec_, 1)
     );
@@ -392,7 +392,7 @@ public:
 
   /// Executes the selection and optionally returns its first row.
   /// @return A task producing the first row, an empty optional, or an error.
-  [[nodiscard]] Task<Result<std::optional<Record>>> FirstOrNullAsync() const {
+  Task<Result<std::optional<Record>>> FirstOrNullAsync() const {
     return FirstOrNullEncodedAsync(
         database_, table_, detail::BuildSelectStatement(table_, spec_, 1)
     );
@@ -400,7 +400,7 @@ public:
 
   /// Counts rows produced by the filtered, limited, and offset selection.
   /// @return A task producing the row count or an error.
-  [[nodiscard]] Task<Result<std::int64_t>> CountAsync() const {
+  Task<Result<std::int64_t>> CountAsync() const {
     return ScalarAsync<std::int64_t>(
         database_, detail::BuildCountStatement(table_, spec_), "count typed selection"
     );
@@ -408,7 +408,7 @@ public:
 
   /// Tests whether the filtered, limited, and offset selection has a row.
   /// @return A task producing `true` when at least one row exists, or an error.
-  [[nodiscard]] Task<Result<bool>> ExistsAsync() const {
+  Task<Result<bool>> ExistsAsync() const {
     return ScalarAsync<bool>(
         database_, detail::BuildExistsStatement(table_, spec_), "test typed selection existence"
     );
@@ -418,7 +418,7 @@ private:
   Selection(Database database, detail::TableSchema table)
       : database_(std::move(database)), table_(std::move(table)) {}
 
-  [[nodiscard]] static Task<Result<std::vector<Record>>> QueryRecordsAsync(
+  static Task<Result<std::vector<Record>>> QueryRecordsAsync(
       Database database,
       detail::TableSchema table,
       Result<detail::CrudStatement> statement
@@ -441,7 +441,7 @@ private:
     );
   }
 
-  [[nodiscard]] static Task<Result<Record>> FirstEncodedAsync(
+  static Task<Result<Record>> FirstEncodedAsync(
       Database database,
       detail::TableSchema table,
       Result<detail::CrudStatement> statement
@@ -462,7 +462,7 @@ private:
     co_return std::move(result->front());
   }
 
-  [[nodiscard]] static Task<Result<std::optional<Record>>> FirstOrNullEncodedAsync(
+  static Task<Result<std::optional<Record>>> FirstOrNullEncodedAsync(
       Database database,
       detail::TableSchema table,
       Result<detail::CrudStatement> statement
@@ -480,7 +480,7 @@ private:
   }
 
   template <class T>
-  [[nodiscard]] static Task<Result<T>> ScalarAsync(
+  static Task<Result<T>> ScalarAsync(
       Database database,
       Result<detail::CrudStatement> statement,
       std::string operation
