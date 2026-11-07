@@ -442,16 +442,25 @@ View TestApplication() {
   return Spacer();
 }
 
-class TestPlatform final : public PlatformAdapter {
+class TestPlatform final : public UiWindow, public huxerui::Runtime {
 public:
   TestPlatform()
-      : PlatformAdapter([this](std::function<void()> callback) {
+      : huxerui::Runtime([this](std::function<void()> callback) {
           {
             std::lock_guard lock(mutex_);
             callbacks_.push_back(std::move(callback));
           }
           changed_.notify_all();
         }) {}
+
+  ~TestPlatform() override { UiWindow::Retire(); huxerui::Runtime::Retire(); }
+
+  void Start(const Application& application) {
+    InitializeApplication(application);
+    InitializeWindow(*this, application.root_factory, application.options.window);
+  }
+
+  void OnRuntimeStopped() override {}
 
   void RequestFrameAt(double) override {
     {
@@ -483,7 +492,7 @@ public:
     return {};
   }
 
-  bool RunNext(Runtime& runtime, std::chrono::steady_clock::time_point deadline) {
+  bool RunNext(UiWindow& runtime, std::chrono::steady_clock::time_point deadline) {
     std::function<void()> callback;
     bool build_frame = false;
     {
@@ -533,7 +542,8 @@ int main() {
   {
     const Application application{TestApplication};
     TestPlatform platform;
-    Runtime runtime{application, platform};
+    platform.Start(application);
+    UiWindow& runtime = platform;
     runtime.SetWindowMetrics({.viewport = {320.0F, 240.0F}});
     static_cast<void>(runtime.BuildFrame());
 

@@ -343,10 +343,10 @@ Task<void> VerifyRollbackAsync(sqlite::Database database, const State<PreviewMod
   );
 }
 
-Task<void> VerifyMigrationAsync(std::shared_ptr<FileSystem> file_system, const State<PreviewModel>& state) {
+Task<void> VerifyMigrationAsync(ApplicationHandle application, const State<PreviewModel>& state) {
   BeginOperation(state, "Creating a version 1 database and migrating it to version 2...");
   const auto nonce = std::chrono::steady_clock::now().time_since_epoch().count();
-  File probe_file = file_system->Directories().temporary_directory.Child(
+  File probe_file = application.Directories().temporary_directory.Child(
       "huxerui-sqlite-migration-" + std::to_string(nonce) + ".sqlite3"
   );
   sqlite::OpenOptions options{.journal_mode = sqlite::JournalMode::Delete};
@@ -466,13 +466,13 @@ View ContactList(const std::vector<Contact>& values, const TaskScope& tasks, con
 } // namespace
 
 View App() {
-  auto file_system = UseService<FileSystem>();
+  auto application = UseApplication();
   auto tasks = UseTaskScope();
   auto state = UseState(PreviewModel{});
   auto name_input = UseState(TextEditingValue::FromText({}));
   auto note_input = UseState(TextEditingValue::FromText({}));
   const File database_file =
-      file_system->Directories().data_directory.Child("sqlite-preview").Child("contacts.sqlite3");
+      application.Directories().data_directory.Child("sqlite-preview").Child("contacts.sqlite3");
 
   Lifecycle([tasks, state, database_file] {
     tasks.Launch([database_file, state]() -> Task<void> { co_await OpenDatabaseAsync(database_file, state); });
@@ -564,11 +564,11 @@ View App() {
           })
           .With(Enabled{ready}),
       Button("Verify migration 1 to 2")
-          .OnClick([tasks, state, file_system] {
+          .OnClick([tasks, state, application] {
             if (state->busy) {
               return;
             }
-            tasks.Launch([file_system, state]() -> Task<void> { co_await VerifyMigrationAsync(file_system, state); });
+            tasks.Launch([application, state]() -> Task<void> { co_await VerifyMigrationAsync(application, state); });
           })
           .With(Enabled{!state->busy}),
     }.With(Spacing{8.0F}),
